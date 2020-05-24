@@ -69,7 +69,7 @@ class P1Reader {
      * output, the Stream is assumed to be already set up (e.g. baud
      * rate configured).
      */
-    P1Reader(Stream *stream, uint8_t req_pin)
+    P1Reader(Stream *stream, uint8_t req_pin) // @suppress("Class members should be properly initialized")
       : stream(stream), req_pin(req_pin), once(false), state(State::DISABLED_STATE) {
       pinMode(req_pin, OUTPUT);
       digitalWrite(req_pin, LOW);
@@ -117,41 +117,12 @@ class P1Reader {
      * (just like available).
      */
     bool loop() {
-      while(true) {
-        if (state == State::CHECKSUM_STATE) {
-          // Let the Stream buffer the CRC bytes. Convert to size_t to
-          // prevent unsigned vs signed comparison
-          if ((size_t)this->stream->available() < CrcParser::CRC_LEN)
-            return false;
-
-          char buf[CrcParser::CRC_LEN];
-          for (uint8_t i = 0; i < CrcParser::CRC_LEN; ++i)
-            buf[i] = this->stream->read();
-
-          ParseResult<uint16_t> crc = CrcParser::parse(buf, buf + lengthof(buf));
-
-          // Prepare for next message
-          state = State::WAITING_STATE;
-
-          if (!crc.err && crc.result == this->crc) {
-            // Message complete, checksum correct
-            this->_available = true;
-
-            if (once)
-             this->disable();
-
-            return true;
-          }
-        } else {
-          // For other states, read bytes one by one
-          int c = this->stream->read();
-          if (c < 0)
-            return false;
-
+    	while(this->stream->available()) {
+          char c = this->stream->read();
           switch (this->state) {
             case State::DISABLED_STATE:
               // Where did this byte come from? Just toss it
-              break;
+               break;
             case State::WAITING_STATE:
               if (c == '/') {
                 this->state = State::READING_STATE;
@@ -163,20 +134,29 @@ class P1Reader {
             case State::READING_STATE:
               // Include the ! in the CRC
               this->crc = _crc16_update(this->crc, c);
-              if (c == '!')
+              if (c == '!') {
                 this->state = State::CHECKSUM_STATE;
-              else
-                buffer.concat((char)c);
-
+              } else {
+               //buffer.concat((char)c);
+               buffer += c;
+              }
               break;
             case State::CHECKSUM_STATE:
-              // This cannot happen (given the surrounding if), but the
-              // compiler is not smart enough to see this, so list this
-              // case to prevent a warning.
-              abort();
+              // Read n (variable) CRC bytes until newline into checksum buffer
+            	// When read, convert to long int and compare
+            	if(c != '\n') {
+              	checksum += c;
+            	} else {
+              	this->state = State::WAITING_STATE;
+                if(strtoul(checksum.c_str() , nullptr, 0) == this->crc ) {
+                  // Message complete, checksum correct
+                  this->_available = true;
+                  if (once) this->disable();
+                  return true;
+                }
+            	}
               break;
           }
-        }
       }
       return false;
     }
@@ -202,23 +182,29 @@ class P1Reader {
       const char *str = buffer.c_str(), *end = buffer.c_str() + buffer.length();
       ParseResult<void> res = P1Parser::parse_data(data, str, end);
 
-      if (res.err && err)
+      if (res.err && err) {
         *err = res.fullError(str, end);
-
+      }
       // Clear the message
       this->clear();
 
-      return res.err == NULL;
+      if(res.err == NULL) {
+      	return true;
+      } else {
+      	return false;
+      }
+      //return res.err == NULL;
     }
 
     /**
      * Clear any complete message from the buffer.
      */
     void clear() {
-      if (_available) {
+    //  if (_available) {
         buffer = "";
         _available = false;
-      }
+        checksum = "0x";
+     // }
     }
 
   protected:
@@ -234,6 +220,7 @@ class P1Reader {
     bool once;
     State state;
     String buffer;
+    String checksum;
     uint16_t crc;
 };
 
